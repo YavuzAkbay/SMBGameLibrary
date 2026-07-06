@@ -1,0 +1,23 @@
+# Build output
+NasConnector/bin/
+NasConnector/obj/
+
+# NuGet packages (restored via `nuget restore`)
+NasConnector/packages/
+
+# Build tooling fetched on demand (Roslyn compiler + NuGet CLI)
+build-tools/
+nuget.exe
+
+# Packaged extension installers produced for releases
+*.pext
+
+# Developer tooling notes (not for public repos)
+CLAUDE.md
+
+# IDE / OS noise
+.vs/
+*.user
+*.suo
+Thumbs.db
+desktop.ini
