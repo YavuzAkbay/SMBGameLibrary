@@ -14,9 +14,15 @@
 
 ---
 
+> **This plugin is intended for DRM-free games you legitimately own** — GOG purchases, itch.io downloads, or any other game you have the right to store and run offline. We do not encourage or support piracy in any form.
+
+---
+
 ## What it does
 
-A NAS or home server is a great place to *store* a large game collection — it's cheap, roomy, and always on. It's a terrible place to *run* games from. Spinning HDDs over the network can't keep up with a modern SSD, and the whole workflow — browse in File Explorer, copy, wait, unzip, hunt for the `.exe`, make a shortcut — is a chore you have to undo when the SSD fills up.
+GOG, itch.io, and other DRM-free stores let you download your games as plain installers or folders that you own outright — no launcher required, no internet check, yours forever. Many people store these on a NAS or home server to keep them safe and accessible across machines.
+
+A NAS is a great place to *archive* games — it's cheap, roomy, and always on. It's a terrible place to *run* them from. Spinning HDDs over the network can't keep up with a modern SSD, and the manual workflow — browse in File Explorer, copy, wait, unzip, hunt for the `.exe`, make a shortcut — is a chore you have to reverse when the SSD fills up.
 
 SMB Game Library connects Playnite directly to an SMB share and automates the whole cycle:
 
