@@ -57,17 +57,13 @@
     <Reference Include="System.Xml" />
     <Reference Include="System.Security" />
     <Reference Include="WindowsBase" />
-    <!-- Windows Forms for FolderBrowserDialog -->
-    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="NasConnectorPlugin.cs" />
     <Compile Include="Models\NasGameType.cs" />
     <Compile Include="Models\NasGameEntry.cs" />
     <Compile Include="Settings\NasConnectorSettings.cs" />
-    <Compile Include="Settings\NasConnectorSettingsView.xaml.cs">
-      <DependentUpon>NasConnectorSettingsView.xaml</DependentUpon>
-    </Compile>
+    <Compile Include="Settings\NasConnectorSettingsView.cs" />
     <Compile Include="Scanner\NasLibraryScanner.cs" />
     <Compile Include="Install\ArchiveInstaller.cs" />
     <Compile Include="Install\FolderCopier.cs" />
@@ -87,10 +83,6 @@
   </ItemGroup>
   <ItemGroup>
     <Page Include="App.xaml">
-      <Generator>MSBuild:Compile</Generator>
-      <SubType>Designer</SubType>
-    </Page>
-    <Page Include="Settings\NasConnectorSettingsView.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>

@@ -152,9 +152,8 @@ NasConnector/
 │   ├── ExecutableFinder.cs       # Heuristics to identify the correct play executable
 │   └── IoRetry.cs                # Retry wrapper for transient SMB I/O errors
 ├── Settings/
-│   ├── NasConnectorSettings.cs           # Plain settings model
-│   ├── NasConnectorSettingsViewModel.cs  # ISettings + TestConnectionCommand
-│   └── NasConnectorSettingsView.xaml     # WPF settings panel
+│   ├── NasConnectorSettings.cs       # Settings model + ISettings view-model (TestConnectionCommand)
+│   └── NasConnectorSettingsView.cs   # WPF settings panel (built programmatically)
 └── extension.yaml                # Playnite extension manifest
 ```
 

@@ -1,14 +1,13 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Forms;
 using Thickness = System.Windows.Thickness;
-using MessageBoxResult = System.Windows.MessageBoxResult;
 
 namespace NasConnector
 {
     public class NasConnectorSettingsView : System.Windows.Controls.UserControl
     {
         private PasswordBox passwordBox;
+        private bool seedingPassword;
 
         public NasConnectorSettingsView()
         {
@@ -30,17 +29,10 @@ namespace NasConnector
             {
                 Content = "Browse...", Width = 80, Margin = new Thickness(5, 0, 0, 0)
             };
-            browseBtn.Click += (s, e) =>
-            {
-                var vm = DataContext as NasConnectorSettingsViewModel;
-                using (var dlg = new FolderBrowserDialog())
-                {
-                    if (vm != null && !string.IsNullOrEmpty(vm.Settings.LocalInstallPath))
-                        dlg.SelectedPath = vm.Settings.LocalInstallPath;
-                    if (dlg.ShowDialog() == DialogResult.OK && vm != null)
-                        vm.Settings.LocalInstallPath = dlg.SelectedPath;
-                }
-            };
+            // Use Playnite's own folder picker (controller-navigable in Fullscreen)
+            // instead of the mouse-only WinForms FolderBrowserDialog.
+            browseBtn.SetBinding(System.Windows.Controls.Button.CommandProperty,
+                new System.Windows.Data.Binding("BrowseLocalPathCommand"));
             DockPanel.SetDock(browseBtn, Dock.Right);
             localPathPanel.Children.Add(browseBtn);
             localPathPanel.Children.Add(BoundTextBox("Settings.LocalInstallPath"));
@@ -60,10 +52,22 @@ namespace NasConnector
             passwordBox = new PasswordBox();
             passwordBox.PasswordChanged += (s, e) =>
             {
+                if (seedingPassword) return; // ignore the programmatic seed below
                 var vm = DataContext as NasConnectorSettingsViewModel;
                 if (vm != null) vm.Settings.SmbPassword = passwordBox.Password;
             };
             authPanel.Children.Add(passwordBox);
+
+            // DataContext is assigned by GetSettingsView after construction, so seed the
+            // PasswordBox once the VM is available (PasswordBox.Password can't be bound).
+            DataContextChanged += (s, e) =>
+            {
+                var vm = DataContext as NasConnectorSettingsViewModel;
+                if (vm == null) return;
+                seedingPassword = true;
+                passwordBox.Password = vm.Settings.SmbPassword ?? string.Empty;
+                seedingPassword = false;
+            };
             authExpander.Content = authPanel;
             root.Children.Add(authExpander);
 

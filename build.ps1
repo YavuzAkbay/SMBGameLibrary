@@ -43,7 +43,6 @@ $refs = @(
     "$fxDir\System.dll",
     "$fxDir\System.Core.dll",
     "$fxDir\System.Xml.dll",
-    "$fxDir\System.Windows.Forms.dll",
     "$fxDir\System.Security.dll"
 )
 

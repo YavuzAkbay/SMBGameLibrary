@@ -1,10 +1,10 @@
 Id: NasConnector_7f3a9d12-4b8e-4c21-a5f6-9e0b1c2d3e4f
 Name: NAS Connector
-Author: bitercat
-Version: 1.2
+Author: YavuzAkbay
+Version: 1.4
 Module: NasConnector.dll
 Type: GameLibrary
 Icon: icon.png
 Links:
     - Name: GitHub
-      Url: https://github.com/bitercat/nas-connector
+      Url: https://github.com/YavuzAkbay/SMBGameLibrary

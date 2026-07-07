@@ -20,6 +20,19 @@ namespace NasConnector
                 .ToList();
         }
 
+        // Every exe under installDir, unfiltered — the last-resort fallback so a
+        // controller-only user can always pick something rather than being left with an
+        // installed-but-unplayable game when the skip filters remove all candidates.
+        public static List<string> GetAllExecutables(string installDir)
+        {
+            if (!Directory.Exists(installDir))
+                return new List<string>();
+
+            return Directory.GetFiles(installDir, "*.exe", SearchOption.AllDirectories)
+                .OrderByDescending(p => new FileInfo(p).Length)
+                .ToList();
+        }
+
         private static readonly string[] SkipPatterns =
         {
             "setup", "install", "uninstall", "unins", "redist",

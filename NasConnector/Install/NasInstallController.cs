@@ -168,6 +168,14 @@ namespace NasConnector
             var candidates = ExecutableFinder.GetCandidateExecutables(installDir);
             if (candidates.Count == 0)
             {
+                // The skip filters removed every candidate. Rather than leave a
+                // controller-only user with an unplayable game and no recovery, fall back
+                // to offering ALL exes in the picker below.
+                candidates = ExecutableFinder.GetAllExecutables(installDir);
+            }
+
+            if (candidates.Count == 0)
+            {
                 api.Notifications.Add(new NotificationMessage(
                     "nas-no-exe-" + Game.Id,
                     $"SMB Game Library: {Game.Name} installed, but no game executable was found. " +

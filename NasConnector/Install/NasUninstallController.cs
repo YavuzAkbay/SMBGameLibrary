@@ -3,6 +3,7 @@ using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
 using System;
 using System.IO;
+using System.Threading;
 using System.Windows;
 
 namespace NasConnector
@@ -39,14 +40,18 @@ namespace NasConnector
 
             try
             {
-                Directory.Delete(installDir, recursive: true);
+                // Retry transient SMB/AV locks, same as the install path does.
+                IoRetry.Run(() => Directory.Delete(installDir, recursive: true),
+                    CancellationToken.None);
             }
             catch (Exception ex)
             {
                 logger.Error(ex, $"Failed to delete {installDir}");
                 api.Dialogs.ShowErrorMessage(
-                    $"Could not fully delete {installDir}:\n{ex.Message}",
+                    $"Could not fully delete {installDir}:\n{ex.Message}\n\n" +
+                    "The game is still marked as installed. Free up the files and try again.",
                     "NAS Connector");
+                return; // leave the game installed — files are still on disk
             }
 
             InvokeOnUninstalled(new GameUninstalledEventArgs());

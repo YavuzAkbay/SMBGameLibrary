@@ -31,9 +31,16 @@ namespace NasConnector
         {
             try
             {
-                bool mounted = TryMountShare();
+                int mountResult = TryMountShare();
+                if (IsAuthError(mountResult))
+                    return (false, $"Authentication failed for {settings.NasBasePath} — {DescribeError(mountResult)}.");
+
                 if (Directory.Exists(settings.NasBasePath))
                     return (true, $"Connection successful. Found: {settings.NasBasePath}");
+
+                if (mountResult != 0 && mountResult != ERROR_ALREADY_ASSIGNED)
+                    return (false, $"Could not connect to {settings.NasBasePath} — {DescribeError(mountResult)}.");
+
                 return (false, $"Path not found: {settings.NasBasePath}");
             }
             catch (Exception ex)
@@ -44,7 +51,11 @@ namespace NasConnector
 
         public List<NasGameEntry> ScanGames(CancellationToken cancelToken)
         {
-            TryMountShare();
+            int mountResult = TryMountShare();
+            if (IsAuthError(mountResult))
+                throw new IOException(
+                    $"Authentication failed for {settings.NasBasePath} — {DescribeError(mountResult)}. " +
+                    "Check the username and password in the SMB Game Library settings.");
 
             var results = new List<NasGameEntry>();
 
@@ -126,11 +137,13 @@ namespace NasConnector
             }
         }
 
-        // SMB authentication via WNetAddConnection2 when credentials are configured
-        private bool TryMountShare()
+        // SMB authentication via WNetAddConnection2 when credentials are configured.
+        // Returns the Win32 result code (0 = connected, 85 = already connected); any
+        // other value is a failure the caller can map to a friendly message.
+        private int TryMountShare()
         {
             if (string.IsNullOrEmpty(settings.SmbUsername))
-                return true;
+                return 0;
 
             try
             {
@@ -143,17 +156,44 @@ namespace NasConnector
                     settings.SmbUsername, 0);
                 if (result != 0 && result != ERROR_ALREADY_ASSIGNED)
                     logger.Warn($"WNetAddConnection2 returned {result} for {settings.NasBasePath}");
-                return result == 0 || result == ERROR_ALREADY_ASSIGNED;
+                return result;
             }
             catch (Exception ex)
             {
                 logger.Warn(ex, "SMB mount attempt failed");
-                return false;
+                return ERROR_EXTENDED_ERROR;
+            }
+        }
+
+        // Wrong credentials / access-denied codes worth surfacing distinctly.
+        private static bool IsAuthError(int code) =>
+            code == ERROR_ACCESS_DENIED || code == ERROR_INVALID_PASSWORD ||
+            code == ERROR_LOGON_FAILURE || code == ERROR_SESSION_CREDENTIAL_CONFLICT;
+
+        private static string DescribeError(int code)
+        {
+            switch (code)
+            {
+                case ERROR_ACCESS_DENIED: return "access denied";
+                case ERROR_INVALID_PASSWORD:
+                case ERROR_LOGON_FAILURE: return "wrong username or password";
+                case ERROR_SESSION_CREDENTIAL_CONFLICT:
+                    return "conflicting credentials for this server (disconnect any existing connection)";
+                case ERROR_BAD_NETPATH:
+                case ERROR_BAD_NET_NAME: return "network path not found";
+                default: return $"error code {code}";
             }
         }
 
         private const int RESOURCETYPE_DISK = 1;
+        private const int ERROR_ACCESS_DENIED = 5;
+        private const int ERROR_BAD_NETPATH = 53;
+        private const int ERROR_BAD_NET_NAME = 67;
         private const int ERROR_ALREADY_ASSIGNED = 85;
+        private const int ERROR_INVALID_PASSWORD = 86;
+        private const int ERROR_EXTENDED_ERROR = 1208;
+        private const int ERROR_LOGON_FAILURE = 1326;
+        private const int ERROR_SESSION_CREDENTIAL_CONFLICT = 1219;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct NETRESOURCE

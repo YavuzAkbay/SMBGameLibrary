@@ -43,6 +43,7 @@ namespace NasConnector
         }
 
         public RelayCommand TestConnectionCommand { get; }
+        public RelayCommand BrowseLocalPathCommand { get; }
 
         public NasConnectorSettingsViewModel(NasConnectorPlugin plugin)
         {
@@ -56,6 +57,15 @@ namespace NasConnector
                 var (success, message) = scanner.TestConnection();
                 ConnectionStatus = message;
                 plugin.PlayniteApi.Dialogs.ShowMessage(message, "NAS Connector");
+            });
+
+            // Playnite's native folder picker — controller-navigable, unlike the old
+            // WinForms FolderBrowserDialog.
+            BrowseLocalPathCommand = new RelayCommand(() =>
+            {
+                var chosen = plugin.PlayniteApi.Dialogs.SelectFolder();
+                if (!string.IsNullOrEmpty(chosen))
+                    Settings.LocalInstallPath = chosen;
             });
         }
 
