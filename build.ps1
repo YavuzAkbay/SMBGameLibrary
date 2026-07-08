@@ -24,9 +24,11 @@ $sources = @(
     "$projDir\Scanner\NasLibraryScanner.cs",
     "$projDir\Scanner\NameCleaner.cs",
     "$projDir\Install\ArchiveInstaller.cs",
+    "$projDir\Install\DefenderExclusions.cs",
     "$projDir\Install\FolderCopier.cs",
     "$projDir\Install\IoRetry.cs",
     "$projDir\Install\ExecutableFinder.cs",
+    "$projDir\Install\PeInspector.cs",
     "$projDir\Install\NasInstallController.cs",
     "$projDir\Install\NasUninstallController.cs",
     "$projDir\Properties\AssemblyInfo.cs"

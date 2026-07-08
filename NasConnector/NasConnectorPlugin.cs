@@ -129,29 +129,43 @@ namespace NasConnector
             if (args.Game.PluginId != Id)
                 yield break;
 
+            // Return instantly. Don't re-scan here — a cache miss (e.g. Playnite just
+            // started) would block the UI thread on the SMB connect with no feedback.
+            // Resolve the entry lazily via this delegate, which the controller calls
+            // INSIDE its own cancellable progress dialog. See NasInstallController.
+            NasGameEntry cached;
+            lock (scanCache)
+                scanCache.TryGetValue(args.Game.GameId, out cached);
+
+            var gameId = args.Game.GameId;
+            Func<System.Threading.CancellationToken, NasGameEntry> resolve =
+                ct => ResolveEntry(gameId, ct);
+
+            yield return new NasInstallController(
+                args.Game, cached, resolve, settingsVm.Settings, PlayniteApi);
+        }
+
+        // Looks up a scan entry by game id, re-scanning the share (populating the cache)
+        // only on a miss. Runs on the install worker thread inside a progress dialog, so
+        // the SMB connect + walk it may trigger are cancellable and show status.
+        private NasGameEntry ResolveEntry(string gameId, System.Threading.CancellationToken cancelToken)
+        {
             NasGameEntry entry;
             lock (scanCache)
             {
-                if (!scanCache.TryGetValue(args.Game.GameId, out entry))
-                {
-                    // Cache miss (e.g. Playnite just started) — do a quick re-scan
-                    try
-                    {
-                        var scanner = new NasLibraryScanner(settingsVm.Settings);
-                        var entries = scanner.ScanGames(System.Threading.CancellationToken.None);
-                        foreach (var e in entries)
-                            scanCache[e.GameId] = e;
-                        scanCache.TryGetValue(args.Game.GameId, out entry);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.Error(ex, "Re-scan failed during GetInstallActions");
-                    }
-                }
+                if (scanCache.TryGetValue(gameId, out entry))
+                    return entry;
             }
 
-            if (entry != null)
-                yield return new NasInstallController(args.Game, entry, settingsVm.Settings, PlayniteApi);
+            var scanner = new NasLibraryScanner(settingsVm.Settings);
+            var entries = scanner.ScanGames(cancelToken);
+            lock (scanCache)
+            {
+                foreach (var e in entries)
+                    scanCache[e.GameId] = e;
+                scanCache.TryGetValue(gameId, out entry);
+            }
+            return entry;
         }
 
         public override IEnumerable<UninstallController> GetUninstallActions(GetUninstallActionsArgs args)

@@ -1,5 +1,26 @@
 AddonId: NasConnector_7f3a9d12-4b8e-4c21-a5f6-9e0b1c2d3e4f
 Packages:
+  - Version: 2.0.0
+    RequiredApiVersion: 6.15.0
+    ReleaseDate: 2026-07-08
+    PackageUrl: https://github.com/YavuzAkbay/SMBGameLibrary/releases/download/v2.0.0/NasConnector.pext
+    Changelog:
+      - Much faster installs — the "Scanning files on NAS…" step now walks the game folder once instead of three times, removing a per-file network round-trip that made large games crawl
+      - Much faster library scans — game folders are now classified in parallel instead of one at a time
+      - Windows Defender false positives on game files no longer break installs — the plugin adds your NAS and install folders to Defender's exclusion list (one UAC prompt) and retries automatically
+      - New settings button to add your library & install folders to Windows Defender exclusions ahead of time
+      - Smarter game executable detection — scores candidates by name match, engine layout (Unity/Unreal/Godot), folder, size and PE subsystem, so the right game launches more often
+      - The "pick an executable" fallback now lists the most likely game first
+      - Uninstall now shows a cancellable progress bar with per-file status instead of freezing the UI on large local copies
+      - Installing no longer briefly freezes Playnite — the SMB connect, free-space check and copy all run inside a cancellable progress dialog
+  - Version: 1.5
+    RequiredApiVersion: 6.15.0
+    ReleaseDate: 2026-07-08
+    PackageUrl: https://github.com/YavuzAkbay/SMBGameLibrary/releases/download/v1.5/NasConnector.pext
+    Changelog:
+      - Fixed games whose .exe lives in a subfolder being skipped by the library scan
+      - The scanner now detects nested game executables up to a few folder levels deep
+      - A single unreadable subfolder no longer drops the whole game from the scan
   - Version: 1.3
     RequiredApiVersion: 6.15.0
     ReleaseDate: 2026-07-06

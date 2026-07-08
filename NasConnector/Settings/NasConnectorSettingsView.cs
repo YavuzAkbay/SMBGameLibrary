@@ -110,6 +110,33 @@ namespace NasConnector
             testBtn.SetBinding(System.Windows.Controls.Button.CommandProperty,
                 new System.Windows.Data.Binding("TestConnectionCommand"));
             root.Children.Add(testBtn);
+
+            AddSpacer(root);
+
+            // Windows Defender's heuristics often raise false positives on game files (custom
+            // packers, unsigned launchers, DRM-free/indie EXEs) and abort the copy/extract
+            // mid-install. This adds the NAS + install folders to Defender's path exclusions
+            // (one UAC prompt) so those false positives stop breaking installs. The plugin also
+            // does this automatically the first time a block occurs; this button lets the user
+            // set it up ahead of time.
+            root.Children.Add(new TextBlock
+            {
+                Text = "Windows Defender sometimes raises false positives on game files (custom packers, " +
+                       "unsigned launchers, DRM-free titles) and blocks the install with \"the file contains " +
+                       "a virus or potentially unwanted software.\" If that happens, add your NAS and install " +
+                       "folders to Defender's exclusion list so these false positives stop interrupting installs:",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+            var defenderBtn = new System.Windows.Controls.Button
+            {
+                Content = "Add my library & install folders to Windows Defender exclusions",
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+                Padding = new Thickness(12, 4, 12, 4)
+            };
+            defenderBtn.SetBinding(System.Windows.Controls.Button.CommandProperty,
+                new System.Windows.Data.Binding("AddDefenderExclusionsCommand"));
+            root.Children.Add(defenderBtn);
         }
 
         private static TextBlock Label(string text) =>

@@ -24,6 +24,12 @@ namespace NasConnector
         {
             Directory.CreateDirectory(destDir);
 
+            // Opening a large archive over SMB reads its header/central directory first,
+            // which can take a few seconds; keep the bar animated until ExtractEntries
+            // computes totals and switches it to a %.
+            progress.IsIndeterminate = true;
+            progress.Text = "Reading archive…";
+
             using (var archive = ArchiveFactory.Open(archivePath, new ReaderOptions()))
             {
                 var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();

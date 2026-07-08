@@ -1,5 +1,6 @@
 using Playnite.SDK;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace NasConnector
 {
@@ -31,7 +33,7 @@ namespace NasConnector
         {
             try
             {
-                int mountResult = TryMountShare();
+                int mountResult = TryMountShare(CancellationToken.None);
                 if (IsAuthError(mountResult))
                     return (false, $"Authentication failed for {settings.NasBasePath} — {DescribeError(mountResult)}.");
 
@@ -51,21 +53,28 @@ namespace NasConnector
 
         public List<NasGameEntry> ScanGames(CancellationToken cancelToken)
         {
-            int mountResult = TryMountShare();
+            int mountResult = TryMountShare(cancelToken);
             if (IsAuthError(mountResult))
                 throw new IOException(
                     $"Authentication failed for {settings.NasBasePath} — {DescribeError(mountResult)}. " +
                     "Check the username and password in the SMB Game Library settings.");
 
-            var results = new List<NasGameEntry>();
-
             if (!Directory.Exists(settings.NasBasePath))
                 throw new IOException($"NAS path not accessible: {settings.NasBasePath}");
 
-            foreach (var dir in Directory.GetDirectories(settings.NasBasePath))
+            // Classify each top-level folder in parallel. Every classification is a chain
+            // of blocking SMB directory enumerations; running them concurrently overlaps
+            // the per-call network latency instead of paying it serially. Cap the degree
+            // of parallelism so we don't flood the share with connections.
+            var results = new ConcurrentBag<NasGameEntry>();
+            var options = new ParallelOptions
             {
-                cancelToken.ThrowIfCancellationRequested();
+                MaxDegreeOfParallelism = 8,
+                CancellationToken = cancelToken
+            };
 
+            Parallel.ForEach(Directory.GetDirectories(settings.NasBasePath), options, dir =>
+            {
                 try
                 {
                     var entry = ClassifyDirectory(dir);
@@ -76,9 +85,9 @@ namespace NasConnector
                 {
                     logger.Warn(ex, $"Skipping directory due to error: {dir}");
                 }
-            }
+            });
 
-            return results;
+            return results.ToList();
         }
 
         private NasGameEntry ClassifyDirectory(string dirPath)
@@ -104,11 +113,13 @@ namespace NasConnector
                 };
             }
 
-            // Check for pre-installed game (has a non-setup .exe at top level)
-            var gameExe = files.FirstOrDefault(f =>
-                Path.GetExtension(f).ToLower() == ".exe" && !IsSkipExe(f));
-
-            if (gameExe != null)
+            // Check for pre-installed game (has a non-setup .exe at top level or nested
+            // within a few subfolder levels — e.g. GameName\bin\win64\game.exe). Reuse the
+            // top-level file list we already fetched to test for a top-level exe before
+            // recursing, saving one SMB round-trip per folder in the common case.
+            if (files.Any(f => Path.GetExtension(f).Equals(".exe", StringComparison.OrdinalIgnoreCase)
+                    && !IsSkipExe(f))
+                || ContainsGameExe(dirPath, 0))
             {
                 return new NasGameEntry
                 {
@@ -120,6 +131,40 @@ namespace NasConnector
             }
 
             return null;
+        }
+
+        // top level = 0; recurse up to this many subfolder levels below it.
+        private const int MaxExeSearchDepth = 4;
+
+        // True if a non-setup .exe exists at dirPath or within MaxExeSearchDepth
+        // subfolders. Lazy + short-circuiting to minimize SMB traversal; a single
+        // inaccessible subfolder is skipped rather than discarding the whole game.
+        private bool ContainsGameExe(string dirPath, int depth)
+        {
+            try
+            {
+                foreach (var exe in Directory.EnumerateFiles(dirPath, "*.exe",
+                    SearchOption.TopDirectoryOnly))
+                {
+                    if (!IsSkipExe(exe))
+                        return true;
+                }
+
+                if (depth >= MaxExeSearchDepth)
+                    return false;
+
+                foreach (var sub in Directory.EnumerateDirectories(dirPath))
+                {
+                    if (ContainsGameExe(sub, depth + 1))
+                        return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Warn(ex, $"Skipping unreadable subtree while scanning: {dirPath}");
+            }
+
+            return false;
         }
 
         private static bool IsSkipExe(string path)
@@ -140,23 +185,37 @@ namespace NasConnector
         // SMB authentication via WNetAddConnection2 when credentials are configured.
         // Returns the Win32 result code (0 = connected, 85 = already connected); any
         // other value is a failure the caller can map to a friendly message.
-        private int TryMountShare()
+        private int TryMountShare(CancellationToken cancelToken)
         {
             if (string.IsNullOrEmpty(settings.SmbUsername))
                 return 0;
 
             try
             {
+                // WNetAddConnection2 is a blocking Win32 call that ignores our cancel
+                // token — on an unreachable NAS it can hang for a long time. Run it on a
+                // background task and poll the token so the caller's progress dialog and
+                // its Cancel button stay responsive. If cancelled, we throw and let the
+                // orphaned task finish harmlessly on its own.
                 var nr = new NETRESOURCE
                 {
                     dwType = RESOURCETYPE_DISK,
                     lpRemoteName = settings.NasBasePath
                 };
-                int result = WNetAddConnection2(ref nr, settings.SmbPassword,
-                    settings.SmbUsername, 0);
+                var task = Task.Run(() =>
+                    WNetAddConnection2(ref nr, settings.SmbPassword, settings.SmbUsername, 0));
+
+                while (!task.Wait(200))
+                    cancelToken.ThrowIfCancellationRequested();
+
+                int result = task.Result;
                 if (result != 0 && result != ERROR_ALREADY_ASSIGNED)
                     logger.Warn($"WNetAddConnection2 returned {result} for {settings.NasBasePath}");
                 return result;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

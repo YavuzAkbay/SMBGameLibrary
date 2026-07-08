@@ -26,12 +26,12 @@ namespace NasConnector
                     action();
                     return;
                 }
-                catch (IOException ex) when (attempt < MaxAttempts)
+                catch (IOException ex) when (attempt < MaxAttempts && !DefenderExclusions.IsVirusBlock(ex))
                 {
                     logger.Warn(ex, $"Transient I/O error (attempt {attempt}/{MaxAttempts}); retrying.");
                     cancel.WaitHandle.WaitOne(BackoffMs);
                 }
-                catch (UnauthorizedAccessException ex) when (attempt < MaxAttempts)
+                catch (UnauthorizedAccessException ex) when (attempt < MaxAttempts && !DefenderExclusions.IsVirusBlock(ex))
                 {
                     // Briefly-held locks (AV scan, indexer) surface as UnauthorizedAccess.
                     logger.Warn(ex, $"Transient access error (attempt {attempt}/{MaxAttempts}); retrying.");

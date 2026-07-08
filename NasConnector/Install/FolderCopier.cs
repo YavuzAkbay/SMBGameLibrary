@@ -15,14 +15,32 @@ namespace NasConnector
         public static void CopyFolder(string sourceDir, string destDir,
             GlobalProgressActionArgs progress, CancellationToken cancel)
         {
-            var files = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
-            var dests = new List<string>(files.Length);
-            foreach (var file in files)
+            // Enumerating a large folder over SMB can take several seconds; keep the bar
+            // animated so it doesn't read as "frozen" before CopyByBytes flips it to a %.
+            progress.IsIndeterminate = true;
+            progress.Text = "Scanning files on NAS…";
+
+            // Walk the tree ONCE. DirectoryInfo.EnumerateFiles hands back FileInfo objects
+            // whose Length is already populated from the directory enumeration, so we build
+            // the source/dest lists AND the byte total from the same walk — no separate
+            // per-file stat pass (each of which was its own SMB round-trip).
+            var sources = new List<string>();
+            var dests = new List<string>();
+            long totalBytes = 0;
+            int seen = 0;
+            foreach (var fi in new DirectoryInfo(sourceDir)
+                .EnumerateFiles("*", SearchOption.AllDirectories))
             {
-                var relative = file.Substring(sourceDir.Length).TrimStart('\\', '/');
+                if ((++seen & 0x3FF) == 0) // every 1024 files, stay cancellable
+                    cancel.ThrowIfCancellationRequested();
+
+                var relative = fi.FullName.Substring(sourceDir.Length).TrimStart('\\', '/');
+                sources.Add(fi.FullName);
                 dests.Add(Path.Combine(destDir, relative));
+                totalBytes += fi.Length;
             }
-            CopyByBytes(files, dests, progress, cancel);
+
+            CopyByBytes(sources, dests, totalBytes, progress, cancel);
         }
 
         public static void CopyFiles(List<string> sourcePaths, string destDir,
@@ -31,24 +49,23 @@ namespace NasConnector
             Directory.CreateDirectory(destDir);
             var sources = new string[sourcePaths.Count];
             var dests = new string[sourcePaths.Count];
+            long totalBytes = 0;
             for (int i = 0; i < sourcePaths.Count; i++)
             {
                 sources[i] = sourcePaths[i];
                 dests[i] = Path.Combine(destDir, Path.GetFileName(sourcePaths[i]));
+                totalBytes += new FileInfo(sourcePaths[i]).Length;
             }
-            CopyByBytes(sources, dests, progress, cancel);
+            CopyByBytes(sources, dests, totalBytes, progress, cancel);
         }
 
         // Copies source->dest pairs streaming by bytes so the progress bar advances
         // smoothly even when a single file is tens of GB. Each file copy is retried on
-        // a transient SMB error via IoRetry.
+        // a transient SMB error via IoRetry. totalBytes is supplied by the caller (read
+        // from the same enumeration that built the lists) to avoid a second stat pass.
         private static void CopyByBytes(IList<string> sources, IList<string> dests,
-            GlobalProgressActionArgs progress, CancellationToken cancel)
+            long totalBytes, GlobalProgressActionArgs progress, CancellationToken cancel)
         {
-            long totalBytes = 0;
-            for (int i = 0; i < sources.Count; i++)
-                totalBytes += new FileInfo(sources[i]).Length;
-
             progress.ProgressMaxValue = totalBytes > 0 ? totalBytes : 1;
             progress.IsIndeterminate = totalBytes == 0;
 

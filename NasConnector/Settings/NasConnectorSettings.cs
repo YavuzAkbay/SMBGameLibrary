@@ -44,6 +44,7 @@ namespace NasConnector
 
         public RelayCommand TestConnectionCommand { get; }
         public RelayCommand BrowseLocalPathCommand { get; }
+        public RelayCommand AddDefenderExclusionsCommand { get; }
 
         public NasConnectorSettingsViewModel(NasConnectorPlugin plugin)
         {
@@ -66,6 +67,37 @@ namespace NasConnector
                 var chosen = plugin.PlayniteApi.Dialogs.SelectFolder();
                 if (!string.IsNullOrEmpty(chosen))
                     Settings.LocalInstallPath = chosen;
+            });
+
+            // Proactively add the NAS share + local install folders to Windows Defender's
+            // path exclusions (one UAC prompt) so cracked game files are never blocked
+            // mid-install. Real-time protection stays on — this only adds path exclusions.
+            AddDefenderExclusionsCommand = new RelayCommand(() =>
+            {
+                var result = DefenderExclusions.AddExclusions(
+                    new[] { Settings.LocalInstallPath, Settings.NasBasePath });
+
+                string message;
+                switch (result)
+                {
+                    case ExclusionResult.Added:
+                        message = "Your NAS and install folders were added to Windows Defender's " +
+                                  "exclusion list. Installs won't be blocked anymore.";
+                        break;
+                    case ExclusionResult.AlreadyCovered:
+                        message = "Your NAS and install folders are already excluded in Windows Defender — " +
+                                  "nothing to do.";
+                        break;
+                    case ExclusionResult.UserCancelled:
+                        message = "Cancelled — the exclusion needs administrator approval (the UAC prompt). " +
+                                  "Nothing was changed.";
+                        break;
+                    default:
+                        message = "Couldn't add the Defender exclusion automatically. Add your NAS and install " +
+                                  "folders manually in Windows Security → Virus & threat protection → Exclusions.";
+                        break;
+                }
+                plugin.PlayniteApi.Dialogs.ShowMessage(message, "SMB Game Library");
             });
         }
 

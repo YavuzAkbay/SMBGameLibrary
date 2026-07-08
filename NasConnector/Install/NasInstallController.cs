@@ -14,7 +14,8 @@ namespace NasConnector
     public class NasInstallController : InstallController
     {
         private static readonly ILogger logger = LogManager.GetLogger();
-        private readonly NasGameEntry entry;
+        private NasGameEntry entry;
+        private readonly Func<CancellationToken, NasGameEntry> resolveEntry;
         private readonly NasConnectorSettings settings;
         private readonly IPlayniteAPI api;
 
@@ -26,9 +27,11 @@ namespace NasConnector
         private string pendingExePickDir;
 
         public NasInstallController(Game game, NasGameEntry entry,
+            Func<CancellationToken, NasGameEntry> resolveEntry,
             NasConnectorSettings settings, IPlayniteAPI api) : base(game)
         {
             this.entry = entry;
+            this.resolveEntry = resolveEntry;
             this.settings = settings;
             this.api = api;
             Name = "Install from share";
@@ -39,49 +42,75 @@ namespace NasConnector
             string installDir = Path.Combine(
                 settings.LocalInstallPath, SanitizeName(Game.Name));
 
-            // Pre-flight free-space check — abort cleanly with a clear message instead of
-            // failing mid-copy and leaving a half-written folder behind.
-            if (!HasEnoughFreeSpace(out long requiredBytes, out long freeBytes))
-            {
-                api.Dialogs.ShowErrorMessage(
-                    $"Not enough free space to install {Game.Name}.\n\n" +
-                    $"Needs about {FormatGb(requiredBytes)}, but only {FormatGb(freeBytes)} is free " +
-                    $"on {Path.GetPathRoot(installDir)}.\n\nFree up some space or choose a different " +
-                    "install drive in the SMB Game Library settings.",
-                    "SMB Game Library");
-                return; // game stays uninstalled
-            }
-
             pendingExePickDir = null;
 
+            // Everything below happens inside the progress dialog so the user always sees
+            // an animated status and can cancel. Nothing heavy (SMB connect, share walk,
+            // free-space read) runs on the UI thread before the dialog appears — that was
+            // the "app frozen, is it crashed?" window.
             api.Dialogs.ActivateGlobalProgress(progressArgs =>
             {
+                var cancel = progressArgs.CancelToken;
                 try
                 {
-                    progressArgs.IsIndeterminate = false;
-                    progressArgs.Text = $"Installing {Game.Name} from share...";
+                    // Phase 1: make sure we know what to install. On a cache miss this
+                    // triggers the SMB connect + share scan — indeterminate spinner keeps
+                    // the UI alive and the Cancel button responsive throughout.
+                    progressArgs.IsIndeterminate = true;
+                    progressArgs.Text = $"Connecting to {settings.NasBasePath}…";
 
-                    switch (entry.GameType)
+                    if (entry == null && resolveEntry != null)
+                        entry = resolveEntry(cancel);
+
+                    if (entry == null)
                     {
-                        case NasGameType.PreInstalledFolder:
-                            Directory.CreateDirectory(installDir);
-                            FolderCopier.CopyFolder(entry.NasFolderPath, installDir,
-                                progressArgs, progressArgs.CancelToken);
-                            CompleteInstall(installDir, null);
-                            break;
-
-                        case NasGameType.SingleArchive:
-                            ArchiveInstaller.ExtractArchive(entry.NasArchivePath, installDir,
-                                progressArgs, progressArgs.CancelToken);
-                            CompleteInstall(installDir, null);
-                            break;
+                        Application.Current.Dispatcher.Invoke(() =>
+                            api.Dialogs.ShowErrorMessage(
+                                $"{Game.Name} could not be found on the share anymore.\n\n" +
+                                "Refresh the SMB Game Library and try again.",
+                                "SMB Game Library"));
+                        return;
                     }
+
+                    cancel.ThrowIfCancellationRequested();
+
+                    // Phase 2: free-space pre-check (reads the NAS tree / archive header).
+                    // Was previously on the UI thread before any feedback.
+                    progressArgs.Text = "Checking available space…";
+                    if (!HasEnoughFreeSpace(out long requiredBytes, out long freeBytes))
+                    {
+                        Application.Current.Dispatcher.Invoke(() =>
+                            api.Dialogs.ShowErrorMessage(
+                                $"Not enough free space to install {Game.Name}.\n\n" +
+                                $"Needs about {FormatGb(requiredBytes)}, but only {FormatGb(freeBytes)} is free " +
+                                $"on {Path.GetPathRoot(installDir)}.\n\nFree up some space or choose a different " +
+                                "install drive in the SMB Game Library settings.",
+                                "SMB Game Library"));
+                        return; // game stays uninstalled
+                    }
+
+                    cancel.ThrowIfCancellationRequested();
+
+                    // Phase 3: copy / extract. The helpers switch the bar to a real % with
+                    // live speed once they've computed totals.
+                    progressArgs.Text = $"Preparing {Game.Name}…";
+                    RunCopyOrExtract(installDir, progressArgs, cancel);
                 }
                 catch (OperationCanceledException)
                 {
                     // Install was cut off mid-way — remove the local copy.
                     // The share source is only ever read from, never touched.
                     TryCleanup(installDir);
+                }
+                catch (Exception ex) when (DefenderExclusions.IsVirusBlock(ex))
+                {
+                    // Windows Defender raised a false positive on a game file (common with
+                    // custom packers / unsigned launchers) and aborted the copy/extract. Add the
+                    // share + install roots to Defender's exclusions (one UAC prompt), then retry
+                    // — instead of the scary raw error.
+                    logger.Warn(ex, $"Defender blocked install of {Game.Name}");
+                    TryCleanup(installDir);
+                    HandleVirusBlock(installDir, progressArgs, cancel);
                 }
                 catch (Exception ex)
                 {
@@ -100,9 +129,98 @@ namespace NasConnector
                 PromptForExecutable(pendingExePickDir);
         }
 
+        // The actual copy/extract, factored out so the virus-block handler can retry it once
+        // after adding Defender exclusions.
+        private void RunCopyOrExtract(string installDir, GlobalProgressActionArgs progressArgs,
+            CancellationToken cancel)
+        {
+            switch (entry.GameType)
+            {
+                case NasGameType.PreInstalledFolder:
+                    Directory.CreateDirectory(installDir);
+                    FolderCopier.CopyFolder(entry.NasFolderPath, installDir,
+                        progressArgs, cancel);
+                    CompleteInstall(installDir, null);
+                    break;
+
+                case NasGameType.SingleArchive:
+                    ArchiveInstaller.ExtractArchive(entry.NasArchivePath, installDir,
+                        progressArgs, cancel);
+                    CompleteInstall(installDir, null);
+                    break;
+            }
+        }
+
+        // Recovery for a Defender virus-block: add the NAS share root and the local install
+        // root to Defender's path exclusions (single UAC prompt), then retry the install once.
+        // The retry calls RunCopyOrExtract directly — a second block therefore falls through
+        // to the generic error handler rather than looping back here.
+        private void HandleVirusBlock(string installDir, GlobalProgressActionArgs progressArgs,
+            CancellationToken cancel)
+        {
+            var paths = new[] { settings.LocalInstallPath, settings.NasBasePath };
+
+            progressArgs.IsIndeterminate = true;
+            progressArgs.Text = "Windows Defender blocked a file — adding an exclusion…";
+
+            var result = DefenderExclusions.AddExclusions(paths);
+            switch (result)
+            {
+                case ExclusionResult.Added:
+                case ExclusionResult.AlreadyCovered:
+                    try
+                    {
+                        progressArgs.Text = $"Retrying {Game.Name}…";
+                        Directory.CreateDirectory(installDir);
+                        RunCopyOrExtract(installDir, progressArgs, cancel);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        TryCleanup(installDir);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Error(ex, $"Install retry failed for {Game.Name}");
+                        TryCleanup(installDir);
+                        Application.Current.Dispatcher.Invoke(() =>
+                            api.Dialogs.ShowErrorMessage(
+                                DefenderExclusions.IsVirusBlock(ex)
+                                    ? $"Windows Defender is still blocking {Game.Name} even after adding an " +
+                                      "exclusion.\n\nOpen Windows Security → Virus & threat protection → " +
+                                      "Exclusions and confirm your NAS and install folders are listed, then " +
+                                      "try again."
+                                    : $"Installation failed:\n{ex.Message}",
+                                "SMB Game Library"));
+                    }
+                    break;
+
+                case ExclusionResult.UserCancelled:
+                    TryCleanup(installDir);
+                    Application.Current.Dispatcher.Invoke(() =>
+                        api.Dialogs.ShowMessage(
+                            $"Windows Defender blocked {Game.Name} — often a false positive on game files " +
+                            "(custom packers, unsigned launchers).\n\n" +
+                            "Installation was cancelled because the Defender exclusion wasn't approved. " +
+                            "You can add the exclusion any time from the SMB Game Library settings " +
+                            "(\"Add my library & install folders to Windows Defender exclusions\") and try again.",
+                            "SMB Game Library"));
+                    break;
+
+                default: // Failed
+                    TryCleanup(installDir);
+                    Application.Current.Dispatcher.Invoke(() =>
+                        api.Dialogs.ShowErrorMessage(
+                            $"Windows Defender blocked {Game.Name}, and the exclusion couldn't be added " +
+                            "automatically.\n\nAdd your NAS and install folders manually in Windows Security → " +
+                            "Virus & threat protection → Exclusions, then try again.",
+                            "SMB Game Library"));
+                    break;
+            }
+        }
+
         private void CompleteInstall(string installDir, string knownExe)
         {
-            var exePath = knownExe ?? ExecutableFinder.FindPlayExecutable(installDir);
+            var exePath = knownExe ?? ExecutableFinder.FindPlayExecutable(installDir, Game.Name);
 
             InvokeOnInstalled(new GameInstalledEventArgs
             {
@@ -165,7 +283,7 @@ namespace NasConnector
         // item maps straight back to a full path.
         private void PromptForExecutable(string installDir)
         {
-            var candidates = ExecutableFinder.GetCandidateExecutables(installDir);
+            var candidates = ExecutableFinder.GetCandidateExecutables(installDir, Game.Name);
             if (candidates.Count == 0)
             {
                 // The skip filters removed every candidate. Rather than leave a
@@ -254,8 +372,12 @@ namespace NasConnector
 
         private static long DirectorySize(string dir)
         {
-            return Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
-                .Sum(f => new FileInfo(f).Length);
+            // Read each file's length from the directory walk itself — over SMB the
+            // enumeration already returns sizes, so this avoids a separate per-file
+            // round-trip (the old GetFiles + new FileInfo pattern did one query per file).
+            return new DirectoryInfo(dir)
+                .EnumerateFiles("*", SearchOption.AllDirectories)
+                .Sum(fi => fi.Length);
         }
 
         // ---- Helpers ------------------------------------------------------------
